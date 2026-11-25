@@ -1,0 +1,122 @@
+// measures.dax
+// Power BI measures and helper tables for the Customer Churn dashboard.
+// Paste each block into Modeling > New table or New measure, one at a time.
+// Table and column names assume the PostgreSQL load from schema.sql (snake_case).
+// If you loaded the CSV instead, rename columns to match (customerID -> customer_id, etc.).
+
+// ---------------------------------------------------------------
+// 1. HELPER TABLES (Modeling > New table)
+// ---------------------------------------------------------------
+
+dim_tenure_group =
+DATATABLE (
+    "tenure_group", STRING,
+    "sort_order", INTEGER,
+    {
+        { "0-12 months", 1 },
+        { "13-24 months", 2 },
+        { "25-48 months", 3 },
+        { "49-60 months", 4 },
+        { "61+ months", 5 }
+    }
+)
+
+dim_contract =
+DATATABLE (
+    "contract", STRING,
+    "sort_order", INTEGER,
+    {
+        { "Month-to-month", 1 },
+        { "One year", 2 },
+        { "Two year", 3 }
+    }
+)
+
+// Holder table for measures (hide the placeholder column afterwards)
+_Measures = ROW ( "Placeholder", BLANK () )
+
+// ---------------------------------------------------------------
+// 2. CORE KPIs (K01 to K09)  -  Modeling > New measure
+// ---------------------------------------------------------------
+
+Total Customers = DISTINCTCOUNT ( customers[customer_id] )                      // format: whole number
+
+Churned Customers = CALCULATE ( [Total Customers], customers[churn] = "Yes" )   // format: whole number
+
+Active Customers = CALCULATE ( [Total Customers], customers[churn] = "No" )     // format: whole number
+
+Churn Rate = DIVIDE ( [Churned Customers], [Total Customers] )                  // format: 0.0%
+
+Retention Rate = DIVIDE ( [Active Customers], [Total Customers] )               // format: 0.0%
+
+Average Tenure = AVERAGE ( customers[tenure] )                                  // format: 0.0
+
+Average Monthly Charges = AVERAGE ( customers[monthly_charges] )                // format: #,##0.00
+
+Monthly Revenue at Risk =
+CALCULATE ( SUM ( customers[monthly_charges] ), customers[churn] = "Yes" )      // format: #,##0.00
+
+Average Revenue per Customer =
+DIVIDE ( SUM ( customers[monthly_charges] ), [Total Customers] )                // format: #,##0.00
+
+// ---------------------------------------------------------------
+// 3. SUPPORTING MEASURES
+// ---------------------------------------------------------------
+
+Overall Churn Rate = CALCULATE ( [Churn Rate], ALL ( customers ) )              // format: 0.0%
+
+Churn Rate vs Overall = [Churn Rate] - [Overall Churn Rate]                     // format: +0.0%;-0.0%;0.0%
+
+Share of Churned Monthly Charges =
+DIVIDE (
+    [Monthly Revenue at Risk],
+    CALCULATE ( [Monthly Revenue at Risk], ALLSELECTED ( customers ) )
+)                                                                               // format: 0.0%
+
+Share of Customers =
+DIVIDE (
+    [Total Customers],
+    CALCULATE ( [Total Customers], ALLSELECTED ( customers ) )
+)                                                                               // format: 0.0%
+
+Avg Monthly Charges (Churned) =
+CALCULATE ( [Average Monthly Charges], customers[churn] = "Yes" )               // format: #,##0.00
+
+Avg Monthly Charges (Retained) =
+CALCULATE ( [Average Monthly Charges], customers[churn] = "No" )                // format: #,##0.00
+
+Charge Gap (Churned - Retained) =
+[Avg Monthly Charges (Churned)] - [Avg Monthly Charges (Retained)]              // format: #,##0.00
+
+Avg Tenure (Churned) = CALCULATE ( [Average Tenure], customers[churn] = "Yes" ) // format: 0.0
+
+Avg Tenure (Retained) = CALCULATE ( [Average Tenure], customers[churn] = "No" ) // format: 0.0
+
+Segment Size Note =
+IF ( [Total Customers] < 30, "Small segment: interpret with caution", BLANK () )
+
+// ---------------------------------------------------------------
+// 4. RISK-TRAIT FIELDS (the combined high-risk group from overlap_analysis.sql)
+// ---------------------------------------------------------------
+
+// Calculated column on the customers table (Modeling > New column):
+risk_traits =
+IF ( customers[contract] = "Month-to-month", 1, 0 )
+    + IF ( customers[internet_service] = "Fiber optic", 1, 0 )
+    + IF ( customers[payment_method] = "Electronic check", 1, 0 )
+
+// Measures:
+High Risk Customers =
+CALCULATE ( [Total Customers], customers[risk_traits] = 3 )                    // format: whole number
+
+High Risk Churn Rate =
+CALCULATE ( [Churn Rate], customers[risk_traits] = 3 )                         // format: 0.0%
+
+High Risk Share of Churned Customers =
+DIVIDE (
+    CALCULATE ( [Churned Customers], customers[risk_traits] = 3 ),
+    CALCULATE ( [Churned Customers], ALLSELECTED ( customers ) )
+)                                                                               // format: 0.0%
+
+// Expected on the full dataset (from overlap_analysis.sql): 1,307 customers,
+// 60.4% churn, 42.2% of all churned customers.
